@@ -1,7 +1,6 @@
 import discord
 import requests
 import json
-import os
 
 intents = discord.Intents.default()
 intents.message_content = True
