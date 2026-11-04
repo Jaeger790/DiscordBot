@@ -1,45 +1,59 @@
+import asyncio
+import os
+
 import discord
 import requests
-import json
-
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
-api_key = 'api_key'
-token = 'bot token'
 
 
-#get weather data function
-async def get_weather(location):
-    url = f'https://api.weatherapi.com/v1/current.json?key={api_key}&q={location}'
-    response = requests.get(url)
+async def fetch_json(url, params=None):
+    def request():
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
 
-    if response.status_code == 200:
-        weather = response.json()
-        return weather['current']['condition']['text'], weather['current']['temp_f']
-    else:
-        return 'Error getting weather data.'
+    # Keep network requests off Discord's event loop.
+    return await asyncio.to_thread(request)
 
 
-# generate inspiring quote function
-def get_quote():
-    response = requests.get("https://zenquotes.io/api/random")
-    json_data = json.loads(response.text)
-    quote = json_data[0]['q'] + " - " + json_data[0]['a']
-    return(quote)
+def create_client(weather_api_key):
+    intents = discord.Intents.default()
+    intents.message_content = True
+    client = discord.Client(intents=intents)
+
+    @client.event
+    async def on_message(message):
+        if message.author.bot:
+            return
+        command, _, argument = message.content.partition(" ")
+        try:
+            if command == "/inspire":
+                data = await fetch_json("https://zenquotes.io/api/random")
+                await message.channel.send(f"{data[0]['q']} - {data[0]['a']}")
+            elif command == "/weather":
+                if not argument.strip():
+                    await message.channel.send("Usage: /weather city")
+                    return
+                data = await fetch_json("https://api.weatherapi.com/v1/current.json", {
+                    "key": weather_api_key, "q": argument.strip()
+                })
+                current = data["current"]
+                await message.channel.send(
+                    f"The current weather in {argument.strip()} is {current['condition']['text']}. "
+                    f"The temperature is {current['temp_f']} degrees Fahrenheit."
+                )
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
+            await message.channel.send("Unable to fetch that information. Try again later.")
+
+    return client
 
 
-#Message commands for bot
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
+def main():
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    weather_key = os.environ.get("WEATHER_API_KEY")
+    if not token or not weather_key:
+        raise SystemExit("Set DISCORD_BOT_TOKEN and WEATHER_API_KEY before running.")
+    create_client(weather_key).run(token)
 
-    if message.content.startswith('/inspire'):
-        quote = get_quote()
-        await message.channel.send(quote)
 
-    if message.content.startswith('/weather'):
-            location = message.content.split('/weather')[1]
-            weather, temperature = await get_weather(location)
-            await message.channel.send(f'The current weather in {location} is {weather}. The temperature is {temperature} degrees Farenheit.')
+if __name__ == "__main__":
+    main()
